@@ -35,10 +35,13 @@ const INSERT_CHARACTER_AFTER_SELECTION = 2;
 const DELETE_CHARACTER_BEFORE_SELECTION = 3;
 const DELETE_CHARACTER_AFTER_SELECTION = 4;
 
-export type HistoryStateEntry = {
+export type HistoryStateEditorEntry = {
   editor: LexicalEditor;
   editorState: EditorState;
 };
+
+export type HistoryStateEntry = Map<string, HistoryStateEditorEntry>;
+
 export type HistoryState = {
   current: null | HistoryStateEntry;
   redoStack: Array<HistoryStateEntry>;
@@ -224,7 +227,7 @@ function createMergeActionGetter(
 ): (
   prevEditorState: null | EditorState,
   nextEditorState: EditorState,
-  currentHistoryEntry: null | HistoryStateEntry,
+  currentHistoryEntry: null | HistoryStateEditorEntry,
   dirtyLeaves: Set<NodeKey>,
   dirtyElements: Map<NodeKey, IntentionallyMarkedAsDirtyElement>,
   tags: Set<string>,
@@ -336,8 +339,10 @@ function redo(editor: LexicalEditor, historyState: HistoryState): void {
     historyState.current = historyStateEntry || null;
 
     if (historyStateEntry) {
-      historyStateEntry.editor.setEditorState(historyStateEntry.editorState, {
-        tag: 'historic',
+      historyStateEntry.forEach((entry) => {
+        entry.editor.setEditorState(entry.editorState, {
+          tag: 'historic',
+        });
       });
     }
   }
@@ -364,8 +369,10 @@ function undo(editor: LexicalEditor, historyState: HistoryState): void {
     historyState.current = historyStateEntry || null;
 
     if (historyStateEntry) {
-      historyStateEntry.editor.setEditorState(historyStateEntry.editorState, {
-        tag: 'historic',
+      historyStateEntry.forEach((entry) => {
+        entry.editor.setEditorState(entry.editorState, {
+          tag: 'historic',
+        });
       });
     }
   }
@@ -409,7 +416,10 @@ export function registerHistory(
     const current = historyState.current;
     const redoStack = historyState.redoStack;
     const undoStack = historyState.undoStack;
-    const currentEditorState = current === null ? null : current.editorState;
+    const editorCurrent =
+      current === null ? null : current.get(editor.getKey()) || null;
+    const currentEditorState =
+      editorCurrent === null ? null : editorCurrent.editorState;
 
     if (current !== null && editorState === currentEditorState) {
       return;
@@ -418,7 +428,7 @@ export function registerHistory(
     const mergeAction = getMergeAction(
       prevEditorState,
       editorState,
-      current,
+      editorCurrent,
       dirtyLeaves,
       dirtyElements,
       tags,
@@ -431,9 +441,8 @@ export function registerHistory(
       }
 
       if (current !== null) {
-        undoStack.push({
-          ...current,
-        });
+        undoStack.push(current);
+        historyState.current = null;
         editor.dispatchCommand(CAN_UNDO_COMMAND, true);
       }
     } else if (mergeAction === DISCARD_HISTORY_CANDIDATE) {
@@ -441,10 +450,16 @@ export function registerHistory(
     }
 
     // Else we merge
-    historyState.current = {
-      editor,
-      editorState,
-    };
+    if (historyState.current) {
+      historyState.current.set(editor.getKey(), {
+        editor,
+        editorState,
+      });
+    } else {
+      historyState.current = new Map([
+        [editor.getKey(), {editor, editorState}],
+      ]);
+    }
   };
 
   const unregisterCommandListener = mergeRegister(
